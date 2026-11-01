@@ -29,6 +29,8 @@ from src.factor_calc import FactorCalculator
 from src.model_train import ModelTrainer
 from src.predictor import Predictor
 from src.notifier import Notifier
+from src.backtest import Backtester
+from src.paper_trader import PaperTrader
 import src.config as cfg
 
 
@@ -72,6 +74,13 @@ def main():
     parser.add_argument("--train", action="store_true", help="执行 LightGBM 模型离线重新训练")
     parser.add_argument("--predict", action="store_true", help="仅执行最新实盘预测与微信推送")
     parser.add_argument("--test-notify", action="store_true", help="测试微信消息推送通道")
+    parser.add_argument("--backtest", action="store_true", help="执行历史区间回测与回滚收益分析")
+    parser.add_argument("--start", type=str, default="2024-01-01", help="回测起点日期 (YYYY-MM-DD)")
+    parser.add_argument("--end", type=str, default="2026-10-22", help="回测终点日期 (YYYY-MM-DD)")
+    parser.add_argument("--no_stop", action="store_true", help="回测时关闭盘中止损止盈盯盘逻辑 (纯5日到期轮动)")
+    parser.add_argument("--paper", action="store_true", help="执行实盘模拟盘操作")
+    parser.add_argument("--paper-action", type=str, choices=["init", "status", "step"], default="status", help="模拟盘操作: init, status, step")
+    parser.add_argument("--capital", type=float, default=cfg.TOTAL_BUDGET, help="模拟盘资金 (默认 1500)")
 
     args = parser.parse_args()
 
@@ -100,6 +109,20 @@ def main():
                 FactorCalculator().run_pipeline()
             ModelTrainer().run_pipeline()
         Predictor(budget=cfg.TOTAL_BUDGET, top_n=cfg.TOP_N_PICKS).run_pipeline(push_notification=True)
+    elif args.backtest:
+        Backtester(
+            start_date=args.start,
+            end_date=args.end,
+            use_stop_loss=not args.no_stop,
+        ).run()
+    elif args.paper:
+        trader = PaperTrader(default_capital=args.capital)
+        if args.paper_action == "init":
+            trader.init_account(args.capital)
+        elif args.paper_action == "step":
+            trader.step()
+        else:
+            trader.print_status()
     elif args.test_notify:
         Notifier().broadcast(
             title="【系统测试】AShare Quant 微信推送通道验证",
