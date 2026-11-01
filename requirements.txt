@@ -1,0 +1,8 @@
+akshare
+pandas
+polars
+lightgbm
+sqlalchemy
+requests
+python-dotenv
+scikit-learn
