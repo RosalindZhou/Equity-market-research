@@ -31,6 +31,8 @@ from src.predictor import Predictor
 from src.notifier import Notifier
 from src.backtest import Backtester
 from src.paper_trader import PaperTrader
+from src.web_app import start_server
+from src.scheduler import start_scheduler_loop
 import src.config as cfg
 
 
@@ -81,6 +83,9 @@ def main():
     parser.add_argument("--paper", action="store_true", help="执行实盘模拟盘操作")
     parser.add_argument("--paper-action", type=str, choices=["init", "status", "step"], default="status", help="模拟盘操作: init, status, step")
     parser.add_argument("--capital", type=float, default=cfg.TOTAL_BUDGET, help="模拟盘资金 (默认 1500)")
+    parser.add_argument("--web", action="store_true", help="启动交互式量化交易 Web 控制台")
+    parser.add_argument("--port", type=int, default=5000, help="Web 控制台端口 (默认 5000)")
+    parser.add_argument("--scheduler", action="store_true", help="启动北京时间盘后自动运行守护进程")
 
     args = parser.parse_args()
 
@@ -91,7 +96,11 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    if args.fetch:
+    if args.web:
+        start_server(port=args.port)
+    elif args.scheduler:
+        start_scheduler_loop()
+    elif args.fetch:
         DataFetcher().fetch_and_save_all()
     elif args.calc:
         FactorCalculator().run_pipeline()
