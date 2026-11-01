@@ -79,15 +79,13 @@ def get_dashboard_data():
             p["stop_loss"] = round(p["cost_price"] * (1.0 - cfg.STOP_LOSS_PCT), 2)
             p["take_profit"] = round(p["cost_price"] * (1.0 + cfg.TAKE_PROFIT_PCT), 2)
 
-        # 获取今日 AI 预测推荐
-        predictor = Predictor(budget=acc["cash"] if acc["cash"] > 300 else cfg.TOTAL_BUDGET)
+        # 获取今日 AI 预测推荐 (基于账户总资产进行等权规划)
+        predictor = Predictor(budget=acc["total_equity"])
         pred_df = predictor.predict()
         plans = predictor.plan_portfolio(pred_df)
         latest_date = str(pred_df["date"][0])
 
         for item in plans["global_top"]:
-            item["name"] = get_stock_name(item["symbol"])
-        for item in plans["budget_top"]:
             item["name"] = get_stock_name(item["symbol"])
 
         # 查询最近 20 笔历史交易流水
@@ -126,7 +124,6 @@ def get_dashboard_data():
             "positions": positions,
             "summary": summary,
             "global_top": plans["global_top"],
-            "budget_top": plans["budget_top"],
             "recent_trades": trades,
             "report_files": report_files,
         })
@@ -168,13 +165,13 @@ def one_click_buy():
         if cursor.fetchone():
             return jsonify({"status": "error", "message": f"标的 [{symbol}] 已在持仓中，请勿重复建仓！"}), 400
 
-        # 计算买入手数 (默认 1手 或根据金额计算)
+        # 计算买入手数 (默认按 20% 组合权重或指定股数)
         shares = int(data.get("shares", 0))
         if shares <= 0:
-            lot_cost = current_price * 100 * (1.0 + cfg.TRANSACTION_FEE + cfg.SLIPPAGE)
-            shares = int(cash // lot_cost) * 100
+            target_cash = min(cash, init_cap / cfg.TOP_N_PICKS)
+            shares = int(target_cash // (current_price * 100.0)) * 100
             if shares <= 0:
-                shares = 100  # 小资金保底1手
+                shares = 100
 
         buy_price = round(current_price * (1.0 + cfg.SLIPPAGE), 2)
         buy_amount = buy_price * shares

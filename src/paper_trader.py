@@ -1,5 +1,5 @@
 """
-实盘模拟盘记账与自动跟踪引擎 (PaperTrader) - 个人小资金实操版
+实盘模拟盘记账与自动跟踪引擎 (PaperTrader) - 机构级实盘模拟版
 ======================================================================
 功能特性：
 1. 本地轻量化 SQLite 账本 (Virtual Account):
@@ -8,7 +8,7 @@
    - 每日开盘/收盘自动检查持仓天数，达到 5 日强制平仓释放资金
    - 盘中实时硬止损 (-5%) 与目标止盈 (+8%) 检查
 3. 动态买入与资金规划:
-   - 依据个人预算 (默认 ¥1500 或自定义)，按 A 股 100 股起买规则执行模拟买入
+   - 基于标准账户资金 (默认 100,000 元)，按 Top-5 组合等权与 A 股 100 股起买规则执行模拟买入
 4. 盈亏与胜率实时核算:
    - 统计当前持仓浮动盈亏、已平仓胜率、盈亏比与累计收益率
    - 联动 Notifier 推送每日模拟盘资产变动研报至微信
@@ -337,47 +337,62 @@ class PaperTrader:
                 """, (b_close, new_hold_days, unrealized_pnl, unrealized_pnl_pct, latest_market_date, code))
 
         # 4. 生成最新推荐标的并模拟建仓
-        predictor = Predictor(budget=current_cash)
+        predictor = Predictor(budget=initial_cap)
         pred_df = predictor.predict()
         plans = predictor.plan_portfolio(pred_df)
 
-        # 优先从预算匹配标的中挑选
-        target_buys = plans["budget_top"] if plans["budget_top"] else plans["global_top"]
+        target_buys = plans["global_top"]
 
         # 检查是否已有持仓，避免重复买入
         cursor.execute("SELECT symbol FROM paper_positions")
         existing_codes = {r[0] for r in cursor.fetchall()}
 
-        for cand in target_buys:
-            c_code = cand["symbol"]
-            if c_code in existing_codes:
-                continue
+        max_slots = cfg.TOP_N_PICKS
+        open_slots = max(1, max_slots - len(existing_codes))
 
-            c_close = cand["close"]
-            lot_cost = c_close * 100.0 * (1.0 + cfg.TRANSACTION_FEE + cfg.SLIPPAGE)
+        if open_slots > 0 and current_cash > 2000.0:
+            avail_cash_per_stock = current_cash / open_slots
 
-            if current_cash >= lot_cost:
-                # 可买入 1 手或多手
-                buy_shares = int(current_cash // lot_cost) * 100
-                buy_price = round(c_close * (1.0 + cfg.SLIPPAGE), 2)
-                buy_amount = buy_price * buy_shares
-                buy_fee = buy_amount * (cfg.TRANSACTION_FEE + cfg.SLIPPAGE)
-                total_cost = buy_amount + buy_fee
+            for cand in target_buys:
+                if len(existing_codes) >= max_slots:
+                    break
 
-                current_cash -= total_cost
-                cursor.execute("""
-                INSERT INTO paper_positions (symbol, shares, cost_price, current_price, entry_date, hold_days, unrealized_pnl, unrealized_pnl_pct, updated_at)
-                VALUES (?, ?, ?, ?, ?, 0, 0.0, 0.0, ?)
-                """, (c_code, buy_shares, buy_price, c_close, latest_market_date, latest_market_date))
+                c_code = cand["symbol"]
+                if c_code in existing_codes:
+                    continue
 
-                cursor.execute("""
-                INSERT INTO paper_trades (date, symbol, side, shares, price, amount, fee, pnl, net_return_pct, reason)
-                VALUES (?, ?, 'BUY', ?, ?, ?, ?, 0.0, 0.0, '信号入场建仓')
-                """, (latest_market_date, c_code, buy_shares, buy_price, buy_amount, buy_fee))
+                c_close = cand["close"]
+                lot_cost = c_close * 100.0 * (1.0 + cfg.TRANSACTION_FEE + cfg.SLIPPAGE)
 
-                trades_executed.append(f"🟢 【买入建仓】{c_code} {buy_shares}股 @ ¥{buy_price:.2f} (占用资金: ¥{total_cost:.2f})")
-                self.logger.info(trades_executed[-1])
-                break  # 小资金单次配置 1 只
+                if current_cash >= lot_cost and avail_cash_per_stock >= lot_cost:
+                    # 计算可买手数
+                    buy_shares = int(avail_cash_per_stock // lot_cost) * 100
+                    if buy_shares <= 0:
+                        buy_shares = 100
+
+                    buy_price = round(c_close * (1.0 + cfg.SLIPPAGE), 2)
+                    buy_amount = buy_price * buy_shares
+                    buy_fee = buy_amount * (cfg.TRANSACTION_FEE + cfg.SLIPPAGE)
+                    total_cost = buy_amount + buy_fee
+
+                    if current_cash < total_cost:
+                        continue
+
+                    current_cash -= total_cost
+                    existing_codes.add(c_code)
+
+                    cursor.execute("""
+                    INSERT INTO paper_positions (symbol, shares, cost_price, current_price, entry_date, hold_days, unrealized_pnl, unrealized_pnl_pct, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 0, 0.0, 0.0, ?)
+                    """, (c_code, buy_shares, buy_price, c_close, latest_market_date, latest_market_date))
+
+                    cursor.execute("""
+                    INSERT INTO paper_trades (date, symbol, side, shares, price, amount, fee, pnl, net_return_pct, reason)
+                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, 0.0, 0.0, '信号入场建仓')
+                    """, (latest_market_date, c_code, buy_shares, buy_price, buy_amount, buy_fee))
+
+                    trades_executed.append(f"🟢 【买入建仓】{c_code} {buy_shares}股 @ ¥{buy_price:.2f} (占用资金: ¥{total_cost:,.2f})")
+                    self.logger.info(trades_executed[-1])
 
         # 5. 核算最新总资产净值
         cursor.execute("SELECT SUM(shares * current_price) FROM paper_positions")
@@ -410,7 +425,7 @@ class PaperTrader:
 def parse_args():
     parser = argparse.ArgumentParser(description="A股量化模拟盘自动交易与记账引擎")
     parser.add_argument("--action", type=str, choices=["init", "status", "step"], default="status", help="操作: init(初始化), status(查询账本), step(执行调仓)")
-    parser.add_argument("--capital", type=float, default=cfg.TOTAL_BUDGET, help="初始本金 (默认 1500)")
+    parser.add_argument("--capital", type=float, default=cfg.TOTAL_BUDGET, help="初始本金 (默认 100000)")
     return parser.parse_args()
 
 

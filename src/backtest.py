@@ -260,7 +260,7 @@ class Backtester:
                 # 计算持股数与绝对盈亏金额
                 shares = int(alloc_cash_per_stock // (actual_buy_price * 100)) * 100
                 if shares <= 0:
-                    shares = 100  # 小资金保底1手
+                    shares = 100  # 最低保底 1手 (100股)
                 
                 trade_invest = shares * actual_buy_price
                 trade_pnl = trade_invest * net_pnl_pct

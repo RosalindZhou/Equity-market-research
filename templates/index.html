@@ -359,17 +359,17 @@
         <!-- Tab 2: 今日AI选股与一键买入 -->
         <div id="tab-picks" class="tab-pane">
             <div class="card-title" style="margin-bottom: 14px;">
-                <span>💡 小资金优选实操标的 (1手 ≤ ¥1500)</span>
-                <span style="font-size: 13px; color: var(--text-muted);">为个人账户量身定制，点击绿色按钮即可【一键模拟买入】</span>
+                <span>🏆 今日 AI 量化精选标的 (Top-5 组合)</span>
+                <span style="font-size: 13px; color: var(--text-muted);">33 维多因子 Alpha 截面评分最高组合，点击绿色按钮即可【一键模拟买入】</span>
             </div>
-            <div class="cards-grid" id="budget-cards-grid">
+            <div class="cards-grid" id="top-cards-grid">
                 <!-- 动态填充 -->
             </div>
 
             <div class="table-card">
                 <div class="card-title">
-                    <span>🏆 全局模型综合最高分 (Top-5)</span>
-                    <span style="font-size: 13px; color: var(--text-muted);">33 维多因子 Alpha 截面预测最高股票池</span>
+                    <span>📊 Top-5 规划明细与仓位权重</span>
+                    <span style="font-size: 13px; color: var(--text-muted);">按标准账户资金等权配置 (每只标的约占 20% 目标仓位)</span>
                 </div>
                 <table>
                     <thead>
@@ -380,9 +380,10 @@
                             <th>收盘现价</th>
                             <th>预测 Alpha</th>
                             <th>建议买入区间</th>
-                            <th>硬止损价</th>
-                            <th>目标止盈价</th>
-                            <th>1手本金</th>
+                            <th>硬止损 (-5%)</th>
+                            <th>目标止盈 (+8%)</th>
+                            <th>规划建仓股数</th>
+                            <th>规划金额 (目标权重)</th>
                             <th>操作</th>
                         </tr>
                     </thead>
@@ -621,9 +622,9 @@
                     }).join('');
                 }
 
-                // 渲染小资金推荐卡片
-                const budgetGrid = document.getElementById('budget-cards-grid');
-                budgetGrid.innerHTML = data.budget_top.map(item => `
+                // 渲染今日 Top-5 组合卡片
+                const topGrid = document.getElementById('top-cards-grid');
+                topGrid.innerHTML = data.global_top.map(item => `
                     <div class="pick-card" style="border-color: rgba(56, 189, 248, 0.4); background: linear-gradient(180deg, #131d31 0%, #152542 100%);">
                         <div class="card-top">
                             <div>
@@ -635,16 +636,16 @@
                         <div class="pick-row"><span>建议买入区间：</span><span>¥${item.buy_range}</span></div>
                         <div class="pick-row"><span>硬止损位 (-5%)：</span><span class="text-down">¥${item.stop_loss.toFixed(2)}</span></div>
                         <div class="pick-row"><span>目标止盈 (+8%)：</span><span class="text-up">¥${item.take_profit.toFixed(2)}</span></div>
-                        <div class="pick-row"><span>1手金额 / 建议：</span><span>¥${item.lot_cost.toFixed(2)} (建议 <strong>${item.can_buy_lots}手</strong>)</span></div>
+                        <div class="pick-row"><span>规划建仓规模：</span><span><strong>${item.target_shares} 股</strong> (约 ¥${item.target_amount.toLocaleString()})</span></div>
                         <div class="pick-actions">
-                            <button class="btn btn-success" style="width: 100%; justify-content: center;" onclick="buyStock('${item.symbol}', ${item.can_buy_lots * 100})">
-                                🟢 一键模拟买入 (${item.can_buy_lots}手)
+                            <button class="btn btn-success" style="width: 100%; justify-content: center;" onclick="buyStock('${item.symbol}', ${item.target_shares})">
+                                🟢 一键模拟买入 (${item.target_shares} 股)
                             </button>
                         </div>
                     </div>
                 `).join('');
 
-                // 渲染全局 Top-5
+                // 渲染全局 Top-5 表格
                 const globalBody = document.getElementById('global-top-body');
                 globalBody.innerHTML = data.global_top.map(item => `
                     <tr>
@@ -656,9 +657,10 @@
                         <td>¥${item.buy_range}</td>
                         <td class="text-down">¥${item.stop_loss.toFixed(2)}</td>
                         <td class="text-up">¥${item.take_profit.toFixed(2)}</td>
-                        <td>¥${item.lot_cost.toFixed(2)}</td>
+                        <td><strong>${item.target_shares} 股</strong></td>
+                        <td>¥${item.target_amount.toLocaleString()} (${item.target_weight_pct}%)</td>
                         <td>
-                            <button class="btn btn-success" style="padding: 4px 10px; font-size: 12px;" onclick="buyStock('${item.symbol}', 100)">
+                            <button class="btn btn-success" style="padding: 4px 10px; font-size: 12px;" onclick="buyStock('${item.symbol}', ${item.target_shares})">
                                 🟢 一键买入
                             </button>
                         </td>
@@ -743,7 +745,7 @@
 
         // 重置本金
         async function promptReset() {
-            const cap = prompt("请输入要重置的初始资金金额（元）：", "1500");
+            const cap = prompt("请输入要重置的初始资金金额（元）：", "100000");
             if (!cap) return;
             const res = await fetch('/api/reset', {
                 method: 'POST',

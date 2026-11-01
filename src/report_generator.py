@@ -49,15 +49,13 @@ class ReportGenerator:
         acc = summary["account"]
         positions = summary["positions"]
 
-        predictor = Predictor(budget=acc["cash"])
+        predictor = Predictor(budget=acc["total_equity"])
         pred_df = predictor.predict()
         plans = predictor.plan_portfolio(pred_df)
         latest_date = str(pred_df["date"][0])
 
         # 为标的补充中文简称
         for item in plans["global_top"]:
-            item["name"] = self._get_stock_name(item["symbol"])
-        for item in plans["budget_top"]:
             item["name"] = self._get_stock_name(item["symbol"])
         for pos in positions:
             pos["name"] = self._get_stock_name(pos["symbol"])
@@ -69,7 +67,6 @@ class ReportGenerator:
             positions=positions,
             summary=summary,
             global_top=plans["global_top"],
-            budget_top=plans["budget_top"],
         )
 
         # 写入 YYYYMMDD 文件及 latest.html
@@ -91,7 +88,6 @@ class ReportGenerator:
         positions: List[Dict[str, Any]],
         summary: Dict[str, Any],
         global_top: List[Dict[str, Any]],
-        budget_top: List[Dict[str, Any]],
     ) -> str:
         # 收益颜色 class
         pnl_class = "text-up" if acc["cumulative_pnl"] >= 0 else "text-down"
@@ -118,12 +114,12 @@ class ReportGenerator:
                 </tr>
                 """
 
-        # 小资金推荐卡片
-        budget_cards = ""
-        for item in budget_top:
-            budget_cards += f"""
+        # 今日 Top-5 精选卡片
+        top_cards = ""
+        for item in global_top:
+            top_cards += f"""
             <div class="stock-card highlight-card">
-                <div class="card-badge">小资金匹配 #{item['rank']}</div>
+                <div class="card-badge">Top #{item['rank']}</div>
                 <div class="card-header">
                     <h3>{item['name']} <span class="code">({item['symbol']})</span></h3>
                     <span class="price">¥{item['close']:.2f}</span>
@@ -133,7 +129,7 @@ class ReportGenerator:
                     <div class="metric-row"><span>建议买入区间：</span><span>¥{item['buy_range']}</span></div>
                     <div class="metric-row"><span>硬止损位 (-5%)：</span><span class="text-down">¥{item['stop_loss']:.2f}</span></div>
                     <div class="metric-row"><span>目标止盈 (+8%)：</span><span class="text-up">¥{item['take_profit']:.2f}</span></div>
-                    <div class="metric-row"><span>1手本金 / 建议：</span><span>¥{item['lot_cost']:.2f} (建议买 <strong>{item['can_buy_lots']}手</strong>)</span></div>
+                    <div class="metric-row"><span>规划建仓股数：</span><span><strong>{item['target_shares']} 股</strong> (约 ¥{item['target_amount']:,.2f})</span></div>
                 </div>
             </div>
             """
@@ -141,7 +137,6 @@ class ReportGenerator:
         # 全局 Top-5 表格
         top5_rows = ""
         for item in global_top:
-            afford = '<span class="badge badge-success">预算充足</span>' if item['is_affordable'] else '<span class="badge badge-warning">暂超预算</span>'
             top5_rows += f"""
             <tr>
                 <td>#{item['rank']}</td>
@@ -152,8 +147,8 @@ class ReportGenerator:
                 <td>¥{item['buy_range']}</td>
                 <td class="text-down">¥{item['stop_loss']:.2f}</td>
                 <td class="text-up">¥{item['take_profit']:.2f}</td>
-                <td>¥{item['lot_cost']:.2f}</td>
-                <td>{afford}</td>
+                <td><strong>{item['target_shares']} 股</strong></td>
+                <td>¥{item['target_amount']:,.2f} ({item['target_weight_pct']}%)</td>
             </tr>
             """
 
@@ -357,14 +352,14 @@ class ReportGenerator:
             </table>
         </div>
 
-        <!-- 小资金精选实操标的 -->
-        <div class="section-title">💡 今日精选小资金标的 (1手 ≤ ¥1500)</div>
+        <!-- 今日 AI 选股 Top-5 组合卡片 -->
+        <div class="section-title">🏆 今日 AI 量化精选标的 (Top-5 组合)</div>
         <div class="card-grid">
-            {budget_cards}
+            {top_cards}
         </div>
 
-        <!-- 全局 Top-5 -->
-        <div class="section-title">🏆 全局模型综合最高分 (Top-5)</div>
+        <!-- 全局 Top-5 明细表 -->
+        <div class="section-title">📊 Top-5 规划明细与仓位权重</div>
         <div class="table-container">
             <table>
                 <thead>
@@ -377,8 +372,8 @@ class ReportGenerator:
                         <th>建议买入区间</th>
                         <th>硬止损 (-5%)</th>
                         <th>目标止盈 (+8%)</th>
-                        <th>1手金额</th>
-                        <th>预算状态</th>
+                        <th>规划股数</th>
+                        <th>规划金额 (目标权重)</th>
                     </tr>
                 </thead>
                 <tbody>

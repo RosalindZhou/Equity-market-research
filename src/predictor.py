@@ -3,8 +3,8 @@
 ===================================================
 1. 最新截面提取: 读取数据库最近 80 交易日量价，极速衍生 33 维 Alpha 因子并计算今日横截面 Rank。
 2. 生产模型推断: 加载训练好的 33 维 LightGBM 模型 (src/lgb_model.txt) 执行前向评分。
-3. 资金与风控引擎: 基于个人小资金预算约束 (1500元) 与 A 股 100 股起买限制，
-   计算建议买入价、买入股数、建议止盈位与硬止损位。
+3. 资金与风控引擎: 基于标准账户总资金与 Top-N 等权组合规划，
+   计算建议买入价、规划持股数、仓位权重、建议止盈位与硬止损位。
 4. 格式化排版: 输出高辨识度 Markdown 报告，自动调用 Notifier 广播至手机微信。
 """
 
@@ -310,25 +310,19 @@ class Predictor:
         return result_df
 
     def plan_portfolio(self, pred_df: pl.DataFrame) -> Dict[str, Any]:
-        """基于预算与 A 股 100 股一手规则执行资金与仓位规划"""
-        # 1. 全局最高分 Top-N
+        """基于标准账户总资产与 Top-N 等权组合规则执行资金与仓位规划"""
         top_candidates = pred_df.head(self.top_n).to_dicts()
+        target_cash_per_stock = self.budget / max(len(top_candidates), 1)
+
         global_top = []
         for row in top_candidates:
-            global_top.append(self._format_plan_row(row, len(global_top) + 1))
-
-        # 2. 小资金预算最优选 (1手所需本金 <= 预算，得分最高的前 3 只)
-        affordable_df = pred_df.filter(pl.col("close") * 100.0 <= self.budget).head(3)
-        budget_top = []
-        for row in affordable_df.to_dicts():
-            budget_top.append(self._format_plan_row(row, len(budget_top) + 1))
+            global_top.append(self._format_plan_row(row, len(global_top) + 1, target_cash_per_stock))
 
         return {
             "global_top": global_top,
-            "budget_top": budget_top,
         }
 
-    def _format_plan_row(self, row: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    def _format_plan_row(self, row: Dict[str, Any], rank: int, target_cash: float) -> Dict[str, Any]:
         code = str(row["symbol"]).zfill(6)
         close = float(row["close"])
         score = float(row["pred_score"])
@@ -338,7 +332,13 @@ class Predictor:
         take_profit = round(close * (1.0 + cfg.TAKE_PROFIT_PCT), 2)
         buy_low = round(close * 0.995, 2)
         buy_high = round(close * 1.010, 2)
-        can_buy_lots = int(self.budget // lot_cost) if lot_cost > 0 else 0
+        
+        # 按等权目标资金折算整数手 (每手 100 股)
+        target_shares = int(target_cash // (close * 100.0)) * 100 if close > 0 else 100
+        if target_shares <= 0:
+            target_shares = 100
+        target_amount = round(target_shares * close, 2)
+        target_weight_pct = round(target_amount / self.budget * 100.0, 1)
 
         return {
             "rank": rank,
@@ -346,11 +346,12 @@ class Predictor:
             "close": close,
             "score": score,
             "lot_cost": lot_cost,
-            "can_buy_lots": can_buy_lots,
+            "target_shares": target_shares,
+            "target_amount": target_amount,
+            "target_weight_pct": target_weight_pct,
             "buy_range": f"{buy_low:.2f} ~ {buy_high:.2f}",
             "stop_loss": stop_loss,
             "take_profit": take_profit,
-            "is_affordable": lot_cost <= self.budget,
         }
 
     def generate_report(self, plans: Dict[str, Any], latest_date: str) -> str:
@@ -359,40 +360,22 @@ class Predictor:
             f"## 🎯 A股量化周频精选研报 ({latest_date})",
             "",
             f"**基准指数**: 中证500 (`000905`) | **模型算法**: LightGBM 33-Factor GBDT (含 WorldQuant 101)",
-            f"**规划可用预算**: ¥{self.budget:.2f} | **持仓轮动周期**: 5 个交易日 (周频轮动)",
+            f"**规划总资产**: ¥{self.budget:,.2f} | **持仓轮动周期**: 5 个交易日 (周频轮动)",
             "",
-            "### 🏆 全局模型综合最高分 (Top-5)",
+            "### 🏆 全局模型综合最高分 Top-5 精选组合",
             "",
-            "| 排名 | 代码 | 最新收盘 | 预测Alpha | 建议买入区间 | 硬止损价 (-5%) | 目标止盈 (+8%) | 1手金额 | 预算匹配 |",
-            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            "| 排名 | 代码 | 最新收盘 | 预测Alpha | 建议买入区间 | 硬止损 (-5%) | 目标止盈 (+8%) | 规划股数 | 规划金额 | 目标权重 |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
         ]
 
         for p in plans["global_top"]:
-            afford_tag = f"✅ {p['can_buy_lots']}手" if p["is_affordable"] else "⚠️ 暂超预算"
             line = (
                 f"| #{p['rank']} | **`{p['symbol']}`** | ¥{p['close']:.2f} | "
                 f"`{p['score']:+.4f}` | ¥{p['buy_range']} | "
                 f"**¥{p['stop_loss']:.2f}** | ¥{p['take_profit']:.2f} | "
-                f"¥{p['lot_cost']:.2f} | {afford_tag} |"
+                f"**{p['target_shares']} 股** | ¥{p['target_amount']:,.2f} | {p['target_weight_pct']}% |"
             )
             report_lines.append(line)
-
-        if plans["budget_top"]:
-            report_lines.extend([
-                "",
-                f"### 💡 小资金精选实操标的 (1手 ≤ ¥{self.budget:.0f})",
-                "",
-                "| 排名 | 代码 | 最新收盘 | 预测Alpha | 建议买入区间 | 止损价 (-5%) | 目标止盈 (+8%) | 1手金额 | 可买手数 |",
-                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
-            ])
-            for p in plans["budget_top"]:
-                line = (
-                    f"| #{p['rank']} | **`{p['symbol']}`** | ¥{p['close']:.2f} | "
-                    f"`{p['score']:+.4f}` | ¥{p['buy_range']} | "
-                    f"**¥{p['stop_loss']:.2f}** | ¥{p['take_profit']:.2f} | "
-                    f"¥{p['lot_cost']:.2f} | **✅ {p['can_buy_lots']}手** |"
-                )
-                report_lines.append(line)
 
         report_lines.extend([
             "",
