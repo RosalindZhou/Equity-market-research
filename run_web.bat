@@ -1,10 +1,9 @@
 @echo off
-chcp 65001 >nul
-title AShare Quant Web 控制台
+cd /d "%~dp0"
+title AShare Quant Web Console
 echo ============================================================
-echo 🚀 正在启动 AShare Quant 量化交互式 Web 控制台...
+echo [AShare Quant] Starting Web Console at http://127.0.0.1:5000 ...
 echo ============================================================
-
-start "" http://127.0.0.1:5000
+start "" "http://127.0.0.1:5000"
 .venv\Scripts\python.exe src\web_app.py
 pause
