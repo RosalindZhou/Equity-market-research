@@ -115,7 +115,9 @@ class ModelTrainer:
     def split_train_test(
         self, df: pl.DataFrame
     ) -> Tuple[pl.DataFrame, pl.DataFrame]:
-        """严格按时间切分训练集与测试集 (严禁随机 Shuffle)"""
+        """Split chronologically and exclude training labels that reach the holdout."""
+        if "label_end_date" not in df.columns:
+            raise ValueError("Regenerate the feature cache with python main.py --calc.")
         self.logger.info(f"执行时序单向切分 (Walk-Forward Split), 切分点: {self.split_date}")
 
         train_df = df.filter(pl.col("date") < self.split_date)
@@ -128,6 +130,10 @@ class ModelTrainer:
             self.logger.info(f"自适应调整切分基准至 75% 处日期: {self.split_date}")
             train_df = df.filter(pl.col("date") < self.split_date)
             test_df = df.filter(pl.col("date") >= self.split_date)
+
+        train_df = train_df.filter(pl.col("label_end_date") < self.split_date)
+        if train_df.is_empty() or test_df.is_empty():
+            raise ValueError("Not enough date coverage for the training and holdout windows.")
 
         self.logger.info(
             f"训练集 (In-Sample):  {train_df.shape[0]} 条样本 | 区间: {train_df['date'].min()} ~ {train_df['date'].max()}"

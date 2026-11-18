@@ -152,10 +152,13 @@ class FactorCalculator:
 
         lead_1_open = pl.col("open").shift(-1).over("symbol")
         lead_6_open = pl.col("open").shift(-6).over("symbol")
+        lead_6_date = pl.col("date").shift(-6).over("symbol")
         raw_ret_5 = (lead_6_open / lead_1_open) - 1.0
 
         # 先物化单股收益率，避免不同 grouping 列嵌套导致 Polars 评估为 null
-        df = df.with_columns(raw_ret_5.alias("_raw_ret_5"))
+        df = df.with_columns(
+            raw_ret_5.alias("_raw_ret_5"), lead_6_date.alias("_raw_label_end")
+        )
 
         # 截面去中心化：减去当日全市场收益率均值，彻底剥离市场 Beta
         excess_ret_5 = pl.col("_raw_ret_5") - pl.col("_raw_ret_5").mean().over("date")
@@ -163,7 +166,17 @@ class FactorCalculator:
         # 截面 Winsorize 去极值 (截断在 [-0.30, +0.30] 防止极端黑天鹅扭曲模型)
         clipped_label = excess_ret_5.clip(-0.30, 0.30).alias(self.TARGET_COL)
 
-        return df.with_columns(clipped_label).drop("_raw_ret_5")
+        # Each excess-return label also depends on the other stocks in its date group.
+        label_end = (
+            pl.when(pl.col("_raw_ret_5").is_not_null())
+            .then(pl.col("_raw_label_end"))
+            .max()
+            .over("date")
+            .alias("label_end_date")
+        )
+        return df.with_columns(clipped_label, label_end).drop(
+            "_raw_ret_5", "_raw_label_end"
+        )
 
     def compute_alpha_factors(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -367,7 +380,7 @@ class FactorCalculator:
         df = self.compute_cross_sectional_ranks(df)
 
         # 7. 筛选特征并去除空值
-        output_cols = ["date", "symbol"] + self.RANK_FEATURES + [self.TARGET_COL]
+        output_cols = ["date", "symbol", "label_end_date"] + self.RANK_FEATURES + [self.TARGET_COL]
         clean_df = df.select(output_cols).drop_nulls()
 
         self.logger.info(
